@@ -1,6 +1,6 @@
 {
   "name": "smtp-envoi",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "description": "Envoi SMTP avec journalisation des notifications et mode test",
   "main": "index.js",
   "license": "MIT"

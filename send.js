@@ -149,8 +149,26 @@ const runSend = async ({ cfg, cibles, sujet, corps, leadId, modeTestLocal }) => 
     return { nb_envoyes: 0, nb_echecs: 0, erreur_envoi: "aucun destinataire" };
   }
 
-  // ── Mode test : on journalise, on n'envoie rien ────────────────────
-  if (modeTest) {
+  /* ── Adresses de redirection ─────────────────────────────────────────
+   * En mode test, deux comportements selon que ce champ est rempli :
+   *
+   *   VIDE   → simulation pure. Rien ne part, on journalise « simule ».
+   *   REMPLI → l'e-mail PART RÉELLEMENT, contenu strictement inchangé, mais
+   *            vers ces adresses au lieu des vraies. On voit donc exactement
+   *            ce que le négociateur recevra : mise en page, rendu, filtrage
+   *            anti-spam. Tout est éprouvé sauf l'adresse.
+   *
+   * ★ Le journal conserve LE DESTINATAIRE RÉEL dans `destinataire`, et note
+   *   la redirection dans `erreur`. Sans quoi on ne saurait pas, après coup,
+   *   qui aurait dû être prévenu — et c'est précisément ce que le tableau de
+   *   bord doit pouvoir dire. */
+  const redirection = String(cfg.redirection_test || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e.includes("@"));
+
+  // ── Mode test SANS redirection : on journalise, on n'envoie rien ────
+  if (modeTest && !redirection.length) {
     for (const d of cibles)
       await journaliser(cfg, {
         lead: leadId || null, destinataire: d.email, role: d.role,
@@ -177,27 +195,55 @@ const runSend = async ({ cfg, cibles, sujet, corps, leadId, modeTestLocal }) => 
   let envoyes = 0;
   const echecs = [];
 
+  cibles.forEach((d, i) => { d._rang = i; });
+
   for (const d of cibles) {
+    /* Répartition tournante : 4 destinataires réels et 4 adresses de test
+     * donnent 4 messages, un par adresse — et non 16. On garde le volume
+     * réel, ce qui permet de vérifier au passage la limite d'envoi OVH. */
+    /* ★ `modeTest &&` est indispensable : sans lui, une adresse de test
+     * oubliée dans la configuration détournerait les vraies notifications
+     * une fois en production, silencieusement. */
+    const redirige = modeTest && redirection.length > 0;
+    const destination = redirige
+      ? redirection[d._rang % redirection.length]
+      : d.email;
+
     let statut = "echec";
     let erreur = "";
     try {
       await tr.sendMail({
         from: { name: cfg.from_nom || "Pipeline", address: cfg.from_email },
-        to: d.email,
+        to: destination,
         subject: sujet || "(sans objet)",
         html: corps || "<p>(corps vide)</p>",
         text: enTexte(corps) || "(corps vide)",
+        /* En-tête, pas contenu : le corps du message reste identique à la
+         * lettre. Visible dans « afficher l'original » du client mail. */
+        ...(redirige
+          ? { headers: {
+              "X-Destinataire-Reel": d.email,
+              "X-Role-Destinataire": d.role || "",
+            } }
+          : {}),
       });
-      statut = "envoye";
+      statut = redirige ? "redirige" : "envoye";
       envoyes++;
     } catch (e) {
       erreur = String(e && e.message ? e.message : e).slice(0, 400);
-      echecs.push(`${d.email} → ${erreur}`);
-      log(2, `échec vers ${d.email} : ${erreur}`);
+      echecs.push(`${destination} → ${erreur}`);
+      log(2, `échec vers ${destination} : ${erreur}`);
     }
+
     await journaliser(cfg, {
-      lead: leadId || null, destinataire: d.email, role: d.role,
-      user_id: d.user_id, objet: sujet, statut, erreur, envoye_le: maintenant,
+      lead: leadId || null,
+      destinataire: d.email,          // ★ le VRAI destinataire, toujours
+      role: d.role,
+      user_id: d.user_id,
+      objet: sujet,
+      statut,
+      erreur: erreur || (redirige ? `redirigé vers ${destination}` : ""),
+      envoye_le: maintenant,
     });
   }
 

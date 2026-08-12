@@ -69,10 +69,21 @@ const configuration_workflow = () =>
                 options: tables.map((t) => t.name),
                 sublabel: "Attendue : `notification`. Colonnes utilisées : lead, "
                         + "destinataire, role, user_id, objet, statut, erreur, envoye_le" },
-              { name: "mode_test", label: "MODE TEST — ne rien envoyer",
+              { name: "redirection_test", label: "Adresses de redirection (mode test)",
+                type: "String",
+                sublabel: "Séparées par des virgules. En mode test, les e-mails "
+                        + "PARTENT RÉELLEMENT vers ces adresses, contenu inchangé, "
+                        + "au lieu des vrais destinataires — répartis en tournant, "
+                        + "un message par destinataire réel. "
+                        + "Laisser VIDE pour une simulation pure sans aucun envoi. "
+                        + "★ Sans effet si le mode test est décoché.",
+                default: "" },
+              { name: "mode_test", label: "MODE TEST — ne pas écrire aux vrais destinataires",
                 type: "Bool", default: true,
-                sublabel: "Coché : les destinataires sont journalisés avec le statut "
-                        + "« simule », mais aucun message ne part. "
+                sublabel: "Coché + redirection vide : rien ne part, statut « simule ». "
+                        + "Coché + redirection remplie : l'e-mail part vers les adresses "
+                        + "de test, statut « redirige », le journal gardant le vrai "
+                        + "destinataire. "
                         + "★ Interrupteur général : un seul endroit pour tout couper, "
                         + "sans rouvrir le workflow." },
             ],
