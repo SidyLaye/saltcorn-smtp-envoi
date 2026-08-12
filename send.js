@@ -18,7 +18,6 @@
  *                                  bord ne peut pas répondre à « ce négociateur
  *                                  a-t-il été prévenu, et quand ».
  */
-const nodemailer = require("nodemailer");
 const Table = require("@saltcorn/data/models/table");
 const { getState } = require("@saltcorn/data/db/state");
 
@@ -30,9 +29,27 @@ const log = (level, msg) => {
   }
 };
 
-/** Construit un transport nodemailer depuis la configuration du plugin. */
-const makeTransport = (cfg) =>
-  nodemailer.createTransport({
+/**
+ * Construit un transport nodemailer depuis la configuration du plugin.
+ *
+ * ★ `require` est fait ICI, pas en tête de fichier. Une dépendance manquante
+ *   au chargement rendrait le module ENTIER vide — `configuration_workflow`
+ *   compris — et Saltcorn afficherait le module sans jamais proposer sa
+ *   configuration, sans le moindre message d'erreur.
+ *   Ainsi, une installation incomplète se signale à l'envoi, avec un message
+ *   lisible, au lieu de se manifester par une absence.
+ */
+const makeTransport = (cfg) => {
+  let nodemailer;
+  try {
+    nodemailer = require("nodemailer");
+  } catch (e) {
+    throw new Error(
+      "nodemailer absent : le module n'a pas installé ses dépendances. "
+      + "Désinstallez puis réinstallez smtp-envoi depuis le magasin de modules."
+    );
+  }
+  return nodemailer.createTransport({
     host: cfg.host,
     port: cfg.port || 465,
     secure: cfg.tls !== false,
@@ -44,6 +61,7 @@ const makeTransport = (cfg) =>
     greetingTimeout: 15000,
     socketTimeout: 20000,
   });
+};
 
 /**
  * Le contexte d'une étape de workflow peut arriver à plat ou sous `row`.

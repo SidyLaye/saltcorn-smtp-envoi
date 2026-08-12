@@ -15,22 +15,38 @@ par le nœud `notifier`. Il n'y a rien à saisir qui puisse se vider.
 
 ## Installation
 
-Comme `imap-idle`. Le dossier doit être visible depuis l'intérieur du conteneur :
+Comme `imap-idle` : par GitHub.
 
-```yaml
-services:
-  saltcorn:
-    volumes:
-      - ./plugin-smtp-envoi:/modules/smtp-envoi
-```
+**1. Publier le dépôt**
 
 ```bash
-docker compose up -d
-docker compose exec saltcorn sh -c "cd /modules/smtp-envoi && npm install --omit=dev"
+cd saltcorn/plugin-smtp-envoi
+git push -u origin main
 ```
 
-Puis Réglages → Modules → Local → `/modules/smtp-envoi` → Installer,
-et **redémarrer le conteneur**.
+Le dépôt `SidyLaye/saltcorn-smtp-envoi` doit exister au préalable sur GitHub,
+en **public** — Saltcorn le clone sans authentification.
+
+**2. Ajouter le module**
+
+Réglages → Magasin de modules → Nouveau :
+
+| Champ | Valeur |
+|---|---|
+| Nom | `smtp-envoi` |
+| Source | **git** |
+| Emplacement | `https://github.com/SidyLaye/saltcorn-smtp-envoi.git` |
+| Version | *(laisser vide)* |
+
+Saltcorn clone le dépôt et lance `npm install` lui-même : `nodemailer` est
+installé automatiquement.
+
+Puis **redémarrer le conteneur** — les actions d'un module ne sont chargées
+qu'au démarrage.
+
+> ⚠ Le nom du module doit correspondre à `plugin_name` dans `index.js`, soit
+> `smtp-envoi`. Un écart empêche les actions d'apparaître dans la liste des
+> déclencheurs, sans message d'erreur.
 
 ## Configuration
 
@@ -107,5 +123,6 @@ DNS de `ambs-agency`. Inutile pour les tests.
 **Débit** : OVH limite les envois par heure sur les offres mutualisées. Un lead
 génère 3 à 5 messages — à surveiller au premier lot réel.
 
-**Après modification d'un fichier**, redémarrer le conteneur : Saltcorn met les
-modules en cache au démarrage.
+**Après modification d'un fichier** : `git push`, puis dans le magasin de
+modules, désinstaller et réinstaller `smtp-envoi`, puis redémarrer le
+conteneur. Saltcorn ne va pas rechercher les commits tout seul.
