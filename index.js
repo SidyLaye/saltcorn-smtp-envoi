@@ -84,7 +84,7 @@ const configuration_workflow = () =>
 
 module.exports = {
   sc_plugin_api_version: 1,
-  plugin_name: "smtp-envoi",
+  plugin_name: "saltcorn-smtp-envoi",
   configuration_workflow,
 
   actions: (cfg) => ({

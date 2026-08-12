@@ -1,6 +1,6 @@
 {
-  "name": "smtp-envoi",
-  "version": "1.0.3",
+  "name": "saltcorn-smtp-envoi",
+  "version": "1.0.4",
   "description": "Envoi SMTP avec journalisation des notifications et mode test",
   "main": "index.js",
   "license": "MIT"
