@@ -103,6 +103,27 @@ const normaliser = (brut, roleDefaut) => {
   return sortie;
 };
 
+/**
+ * Version texte d'un corps HTML.
+ *
+ * Un message HTML sans alternative texte est un signal de spam classique :
+ * les campagnes légitimes envoient les deux parties, les envois automatisés
+ * bâclés n'envoient que le HTML. Coût nul, gain réel sur la délivrabilité.
+ */
+const enTexte = (html) =>
+  String(html || "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<li[^>]*>/gi, "- ")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+
 /** Écrit une ligne dans `notification`. N'échoue jamais bruyamment. */
 const journaliser = async (cfg, ligne) => {
   try {
@@ -165,6 +186,7 @@ const runSend = async ({ cfg, cibles, sujet, corps, leadId, modeTestLocal }) => 
         to: d.email,
         subject: sujet || "(sans objet)",
         html: corps || "<p>(corps vide)</p>",
+        text: enTexte(corps) || "(corps vide)",
       });
       statut = "envoye";
       envoyes++;
@@ -185,4 +207,4 @@ const runSend = async ({ cfg, cibles, sujet, corps, leadId, modeTestLocal }) => 
   return { nb_envoyes: envoyes, nb_echecs: echecs.length, erreur_envoi: echecs.join(" | ") };
 };
 
-module.exports = { runSend, makeTransport, normaliser, contexte, log };
+module.exports = { runSend, makeTransport, normaliser, contexte, enTexte, log };

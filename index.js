@@ -19,7 +19,7 @@ const Workflow = require("@saltcorn/data/models/workflow");
 const Form = require("@saltcorn/data/models/form");
 const Table = require("@saltcorn/data/models/table");
 
-const { runSend, makeTransport, normaliser, contexte, log } = require("./send");
+const { runSend, makeTransport, normaliser, contexte, enTexte, log } = require("./send");
 
 // ── Configuration ────────────────────────────────────────────────────
 const configuration_workflow = () =>
@@ -202,6 +202,7 @@ module.exports = {
             to: dest,
             subject: "Test SMTP — pipeline Sélection Habitat",
             html: "<p>Si vous lisez ceci, l'envoi fonctionne.</p>",
+            text: "Si vous lisez ceci, l'envoi fonctionne.",
           });
           try { tr.close(); } catch (e) {}
           log(4, `test SMTP réussi vers ${dest}`);
