@@ -1,10 +1,7 @@
 {
   "name": "saltcorn-smtp-envoi",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Envoi SMTP avec journalisation des notifications et mode test",
   "main": "index.js",
-  "license": "MIT",
-  "dependencies": {
-    "nodemailer": "^6.9.14"
-  }
+  "license": "MIT"
 }
