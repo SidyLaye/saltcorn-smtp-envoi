@@ -18,6 +18,7 @@
  *                                  bord ne peut pas répondre à « ce négociateur
  *                                  a-t-il été prévenu, et quand ».
  */
+
 const Table = require("@saltcorn/data/models/table");
 const { getState } = require("@saltcorn/data/db/state");
 
@@ -29,265 +30,692 @@ const log = (level, msg) => {
   }
 };
 
+
 /**
  * Construit un transport nodemailer depuis la configuration du plugin.
- *
- * ★ `require` est fait ICI, pas en tête de fichier. Une dépendance manquante
- *   au chargement rendrait le module ENTIER vide — `configuration_workflow`
- *   compris — et Saltcorn afficherait le module sans jamais proposer sa
- *   configuration, sans le moindre message d'erreur.
- *   Ainsi, une installation incomplète se signale à l'envoi, avec un message
- *   lisible, au lieu de se manifester par une absence.
  */
 const makeTransport = (cfg) => {
+
   let nodemailer;
+
   try {
     nodemailer = require("nodemailer");
   } catch (e) {
+
     throw new Error(
       "nodemailer absent : le module n'a pas installé ses dépendances. "
       + "Désinstallez puis réinstallez smtp-envoi depuis le magasin de modules."
     );
   }
+
+
   return nodemailer.createTransport({
+
     host: cfg.host,
-    port: cfg.port || 465,
-    secure: cfg.tls !== false,
-  
+
+    port:
+      cfg.port || 465,
+
+    secure:
+      cfg.tls !== false,
+
     auth: {
       user: cfg.username,
       pass: cfg.password
     },
-  
-    tls: cfg.allow_self_signed
-      ? { rejectUnauthorized: false }
-      : undefined,
-  
+
+    tls:
+      cfg.allow_self_signed
+        ? {
+            rejectUnauthorized: false
+          }
+        : undefined,
+
+
     /*
      * POOL SMTP
      *
-     * Une seule connexion SMTP est ouverte puis réutilisée
-     * pour les différents destinataires du lead.
+     * Une seule connexion SMTP est utilisée.
      *
-     * On ne change PAS la logique d'envoi :
-     * - toujours un mail par destinataire
-     * - toujours négociateur + secrétaire + custom
-     * - toujours la boucle séquentielle existante
-     * - aucun retry ajouté
+     * Maximum :
+     * 1 message toutes les 10 secondes.
+     *
+     * La logique métier ne change pas.
      */
     pool: true,
-  
-    // Une seule connexion SMTP simultanée
+
     maxConnections: 1,
-  
-    // Réutilisation de la même connexion
+
     maxMessages: 100,
-  
-    /*
-     * Protection légère contre les rafales :
-     * maximum 1 message par seconde sur ce transport.
-     *
-     * Cela ne change pas la logique fonctionnelle,
-     * seulement la cadence SMTP.
-     */
+
     rateDelta: 10000,
+
     rateLimit: 1,
-  
-    // Timeouts existants conservés
+
+
+    /*
+     * Timeouts
+     */
     connectionTimeout: 15000,
+
     greetingTimeout: 15000,
-    socketTimeout: 20000,
+
+    socketTimeout: 20000
   });
 };
 
+
 /**
  * Le contexte d'une étape de workflow peut arriver à plat ou sous `row`.
- * On fusionne les deux plutôt que de parier sur l'un.
  */
-const contexte = (args) => ({ ...(args && args.row ? args.row : {}), ...(args || {}) });
+const contexte = (args) => ({
+  ...(args && args.row ? args.row : {}),
+  ...(args || {})
+});
+
 
 /**
- * Normalise les destinataires. Trois formes acceptées :
- *   "a@x.fr,b@y.fr" · ["a@x.fr"] · [{ email, role, user_id }]
+ * Normalise les destinataires.
  *
- * ★ Le dédoublonnage n'est pas cosmétique : une même personne peut être
- *   négociateur sur un lead et secrétaire sur un autre. Elle ne doit recevoir
- *   qu'un seul message.
+ * Formes acceptées :
+ *
+ * "a@x.fr,b@y.fr"
+ *
+ * ["a@x.fr"]
+ *
+ * [
+ *   {
+ *     email,
+ *     role,
+ *     user_id
+ *   }
+ * ]
  */
 const normaliser = (brut, roleDefaut) => {
-  let liste = brut;
-  if (typeof liste === "string") {
-    const t = liste.trim();
-    if (t.startsWith("[")) {
-      try { liste = JSON.parse(t); } catch (e) { liste = t.split(","); }
-    } else liste = t.split(",");
-  }
-  if (!Array.isArray(liste)) return [];
 
-  const vus = new Set();
-  const sortie = [];
+  let liste = brut;
+
+
+  if (typeof liste === "string") {
+
+    const t =
+      liste.trim();
+
+
+    if (t.startsWith("[")) {
+
+      try {
+
+        liste =
+          JSON.parse(t);
+
+      } catch (e) {
+
+        liste =
+          t.split(",");
+      }
+
+    } else {
+
+      liste =
+        t.split(",");
+    }
+  }
+
+
+  if (!Array.isArray(liste)) {
+    return [];
+  }
+
+
+  const vus =
+    new Set();
+
+
+  const sortie =
+    [];
+
+
   for (const d of liste) {
-    const o = typeof d === "string" ? { email: d } : d || {};
-    const email = String(o.email || "").trim().toLowerCase();
-    if (!email || !email.includes("@") || vus.has(email)) continue;
+
+    const o =
+      typeof d === "string"
+        ? {
+            email: d
+          }
+        : d || {};
+
+
+    const email =
+      String(o.email || "")
+        .trim()
+        .toLowerCase();
+
+
+    if (
+      !email ||
+      !email.includes("@") ||
+      vus.has(email)
+    ) {
+      continue;
+    }
+
+
     vus.add(email);
+
+
     sortie.push({
+
       email,
-      role: o.role || roleDefaut || "",
-      user_id: o.user_id != null ? o.user_id : null,
+
+      role:
+        o.role ||
+        roleDefaut ||
+        "",
+
+      user_id:
+        o.user_id != null
+          ? o.user_id
+          : null
     });
   }
+
+
   return sortie;
 };
 
+
 /**
  * Version texte d'un corps HTML.
- *
- * Un message HTML sans alternative texte est un signal de spam classique :
- * les campagnes légitimes envoient les deux parties, les envois automatisés
- * bâclés n'envoient que le HTML. Coût nul, gain réel sur la délivrabilité.
  */
 const enTexte = (html) =>
+
   String(html || "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<li[^>]*>/gi, "- ")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\n{3,}/g, "\n\n")
+
+    .replace(
+      /<style[\s\S]*?<\/style>/gi,
+      ""
+    )
+
+    .replace(
+      /<\/(p|div|li|tr|h[1-6])>/gi,
+      "\n"
+    )
+
+    .replace(
+      /<br\s*\/?>/gi,
+      "\n"
+    )
+
+    .replace(
+      /<li[^>]*>/gi,
+      "- "
+    )
+
+    .replace(
+      /<[^>]+>/g,
+      ""
+    )
+
+    .replace(
+      /&nbsp;/g,
+      " "
+    )
+
+    .replace(
+      /&amp;/g,
+      "&"
+    )
+
+    .replace(
+      /&lt;/g,
+      "<"
+    )
+
+    .replace(
+      /&gt;/g,
+      ">"
+    )
+
+    .replace(
+      /\n{3,}/g,
+      "\n\n"
+    )
+
     .trim();
 
-/** Écrit une ligne dans `notification`. N'échoue jamais bruyamment. */
+
+/**
+ * Écrit une ligne dans `notification`.
+ * N'échoue jamais bruyamment.
+ */
 const journaliser = async (cfg, ligne) => {
+
   try {
-    const t = Table.findOne({ name: cfg.table_journal || "notification" });
-    if (t) await t.insertRow(ligne);
+
+    const t =
+      Table.findOne({
+        name:
+          cfg.table_journal ||
+          "notification"
+      });
+
+
+    if (t) {
+      await t.insertRow(ligne);
+    }
+
   } catch (e) {
-    // Un envoi réussi ne doit pas être rapporté en échec parce que le journal
-    // a fauté.
-    log(2, `journalisation impossible : ${e.message}`);
+
+    log(
+      2,
+      `journalisation impossible : ${e.message}`
+    );
   }
 };
 
+
 /**
- * Une passe d'envoi. Ne lève jamais.
- * Retourne toujours un objet exploitable comme contexte de workflow.
+ * Une passe d'envoi.
+ *
+ * Ne lève jamais.
  */
-const runSend = async ({ cfg, cibles, sujet, corps, leadId, modeTestLocal }) => {
-  const maintenant = new Date();
-  const modeTest = cfg.mode_test === true || modeTestLocal === true;
+const runSend = async ({
+  cfg,
+  cibles,
+  sujet,
+  corps,
+  leadId,
+  modeTestLocal
+}) => {
+
+
+  const maintenant =
+    new Date();
+
+
+  const modeTest =
+    cfg.mode_test === true ||
+    modeTestLocal === true;
+
 
   if (!cibles.length) {
-    log(3, "aucun destinataire — envoi ignoré");
-    return { nb_envoyes: 0, nb_echecs: 0, erreur_envoi: "aucun destinataire" };
-  }
 
-  /* ── Adresses de redirection ─────────────────────────────────────────
-   * En mode test, deux comportements selon que ce champ est rempli :
-   *
-   *   VIDE   → simulation pure. Rien ne part, on journalise « simule ».
-   *   REMPLI → l'e-mail PART RÉELLEMENT, contenu strictement inchangé, mais
-   *            vers ces adresses au lieu des vraies. On voit donc exactement
-   *            ce que le négociateur recevra : mise en page, rendu, filtrage
-   *            anti-spam. Tout est éprouvé sauf l'adresse.
-   *
-   * ★ Le journal conserve LE DESTINATAIRE RÉEL dans `destinataire`, et note
-   *   la redirection dans `erreur`. Sans quoi on ne saurait pas, après coup,
-   *   qui aurait dû être prévenu — et c'est précisément ce que le tableau de
-   *   bord doit pouvoir dire. */
-  const redirection = String(cfg.redirection_test || "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter((e) => e.includes("@"));
+    log(
+      3,
+      "aucun destinataire — envoi ignoré"
+    );
 
-  // ── Mode test SANS redirection : on journalise, on n'envoie rien ────
-  if (modeTest && !redirection.length) {
-    for (const d of cibles)
-      await journaliser(cfg, {
-        lead: leadId || null, destinataire: d.email, role: d.role,
-        user_id: d.user_id, objet: sujet, statut: "simule",
-        erreur: "", envoye_le: maintenant,
-      });
-    log(4, `mode test : ${cibles.length} destinataire(s) simulé(s)`);
+
     return {
       nb_envoyes: 0,
-      nb_simules: cibles.length,
-      erreur_envoi: "",
-      apercu_destinataires: cibles.map((d) => d.email).join(", "),
+      nb_echecs: 0,
+      erreur_envoi: "aucun destinataire"
     };
   }
 
-  let tr;
-  try {
-    tr = makeTransport(cfg);
-  } catch (e) {
-    log(1, `transport impossible : ${e.message}`);
-    return { nb_envoyes: 0, erreur_envoi: `transport SMTP : ${e.message}` };
-  }
 
-  let envoyes = 0;
-  const echecs = [];
+  /*
+   * Adresses de redirection test.
+   */
+  const redirection =
 
-  cibles.forEach((d, i) => { d._rang = i; });
+    String(
+      cfg.redirection_test || ""
+    )
 
-  for (const d of cibles) {
-    /* Répartition tournante : 4 destinataires réels et 4 adresses de test
-     * donnent 4 messages, un par adresse — et non 16. On garde le volume
-     * réel, ce qui permet de vérifier au passage la limite d'envoi OVH. */
-    /* ★ `modeTest &&` est indispensable : sans lui, une adresse de test
-     * oubliée dans la configuration détournerait les vraies notifications
-     * une fois en production, silencieusement. */
-    const redirige = modeTest && redirection.length > 0;
-    const destination = redirige
-      ? redirection[d._rang % redirection.length]
-      : d.email;
+      .split(",")
 
-    let statut = "echec";
-    let erreur = "";
-    try {
-      await tr.sendMail({
-        from: { name: cfg.from_nom || "Pipeline", address: cfg.from_email },
-        to: destination,
-        subject: sujet || "(sans objet)",
-        html: corps || "<p>(corps vide)</p>",
-        text: enTexte(corps) || "(corps vide)",
-        /* En-tête, pas contenu : le corps du message reste identique à la
-         * lettre. Visible dans « afficher l'original » du client mail. */
-        ...(redirige
-          ? { headers: {
-              "X-Destinataire-Reel": d.email,
-              "X-Role-Destinataire": d.role || "",
-            } }
-          : {}),
-      });
-      statut = redirige ? "redirige" : "envoye";
-      envoyes++;
-    } catch (e) {
-      erreur = String(e && e.message ? e.message : e).slice(0, 400);
-      echecs.push(`${destination} → ${erreur}`);
-      log(2, `échec vers ${destination} : ${erreur}`);
+      .map(
+        (e) =>
+          e.trim().toLowerCase()
+      )
+
+      .filter(
+        (e) =>
+          e.includes("@")
+      );
+
+
+  /*
+   * MODE TEST SANS REDIRECTION
+   *
+   * Rien ne part.
+   */
+  if (
+    modeTest &&
+    !redirection.length
+  ) {
+
+
+    for (const d of cibles) {
+
+      await journaliser(
+        cfg,
+        {
+
+          lead:
+            leadId || null,
+
+          destinataire:
+            d.email,
+
+          role:
+            d.role,
+
+          user_id:
+            d.user_id,
+
+          objet:
+            sujet,
+
+          statut:
+            "simule",
+
+          erreur:
+            "",
+
+          envoye_le:
+            maintenant
+        }
+      );
     }
 
-    await journaliser(cfg, {
-      lead: leadId || null,
-      destinataire: d.email,          // ★ le VRAI destinataire, toujours
-      role: d.role,
-      user_id: d.user_id,
-      objet: sujet,
-      statut,
-      erreur: erreur || (redirige ? `redirigé vers ${destination}` : ""),
-      envoye_le: maintenant,
-    });
+
+    log(
+      4,
+      `mode test : ${cibles.length} destinataire(s) simulé(s)`
+    );
+
+
+    return {
+
+      nb_envoyes: 0,
+
+      nb_simules:
+        cibles.length,
+
+      erreur_envoi:
+        "",
+
+      apercu_destinataires:
+        cibles
+          .map(
+            (d) => d.email
+          )
+          .join(", ")
+    };
   }
 
-  try { tr.close(); } catch (e) { /* transport déjà fermé */ }
 
-  log(5, `envoi terminé : ${envoyes} envoyé(s), ${echecs.length} échec(s)`);
-  return { nb_envoyes: envoyes, nb_echecs: echecs.length, erreur_envoi: echecs.join(" | ") };
+  /*
+   * TRANSPORT SMTP
+   */
+  let tr;
+
+
+  try {
+
+    tr =
+      makeTransport(cfg);
+
+  } catch (e) {
+
+
+    log(
+      1,
+      `transport impossible : ${e.message}`
+    );
+
+
+    return {
+
+      nb_envoyes:
+        0,
+
+      erreur_envoi:
+        `transport SMTP : ${e.message}`
+    };
+  }
+
+
+  let envoyes =
+    0;
+
+
+  const echecs =
+    [];
+
+
+  cibles.forEach(
+    (d, i) => {
+      d._rang = i;
+    }
+  );
+
+
+  /*
+   * UN ENVOI PAR DESTINATAIRE
+   *
+   * Cette logique reste inchangée.
+   */
+  for (const d of cibles) {
+
+
+    const redirige =
+      modeTest &&
+      redirection.length > 0;
+
+
+    const destination =
+
+      redirige
+
+        ? redirection[
+            d._rang %
+            redirection.length
+          ]
+
+        : d.email;
+
+
+    let statut =
+      "echec";
+
+
+    let erreur =
+      "";
+
+
+    try {
+
+
+      /*
+       * NOM D'EXPÉDITEUR FACULTATIF
+       *
+       * Si cfg.from_nom est vide :
+       *
+       * From: adresse@email.fr
+       *
+       * Si un nom existe :
+       *
+       * From: Nom <adresse@email.fr>
+       */
+      const expediteur =
+
+        cfg.from_nom &&
+        String(cfg.from_nom).trim()
+
+          ? {
+
+              name:
+                String(
+                  cfg.from_nom
+                ).trim(),
+
+              address:
+                cfg.from_email
+
+            }
+
+          : cfg.from_email;
+
+
+      await tr.sendMail({
+
+        from:
+          expediteur,
+
+        to:
+          destination,
+
+        subject:
+          sujet ||
+          "(sans objet)",
+
+        html:
+          corps ||
+          "<p>(corps vide)</p>",
+
+        text:
+          enTexte(corps) ||
+          "(corps vide)",
+
+
+        /*
+         * Seulement en redirection de test.
+         */
+        ...(redirige
+
+          ? {
+
+              headers: {
+
+                "X-Destinataire-Reel":
+                  d.email,
+
+                "X-Role-Destinataire":
+                  d.role || ""
+              }
+
+            }
+
+          : {})
+      });
+
+
+      statut =
+        redirige
+          ? "redirige"
+          : "envoye";
+
+
+      envoyes++;
+
+
+    } catch (e) {
+
+
+      erreur =
+        String(
+          e && e.message
+            ? e.message
+            : e
+        )
+          .slice(
+            0,
+            400
+          );
+
+
+      echecs.push(
+        `${destination} → ${erreur}`
+      );
+
+
+      log(
+        2,
+        `échec vers ${destination} : ${erreur}`
+      );
+    }
+
+
+    await journaliser(
+      cfg,
+      {
+
+        lead:
+          leadId || null,
+
+        destinataire:
+          d.email,
+
+        role:
+          d.role,
+
+        user_id:
+          d.user_id,
+
+        objet:
+          sujet,
+
+        statut,
+
+        erreur:
+
+          erreur ||
+
+          (
+            redirige
+
+              ? `redirigé vers ${destination}`
+
+              : ""
+          ),
+
+        envoye_le:
+          maintenant
+      }
+    );
+  }
+
+
+  try {
+
+    tr.close();
+
+  } catch (e) {
+
+    /* transport déjà fermé */
+
+  }
+
+
+  log(
+    5,
+    `envoi terminé : ${envoyes} envoyé(s), ${echecs.length} échec(s)`
+  );
+
+
+  return {
+
+    nb_envoyes:
+      envoyes,
+
+    nb_echecs:
+      echecs.length,
+
+    erreur_envoi:
+      echecs.join(" | ")
+  };
 };
 
-module.exports = { runSend, makeTransport, normaliser, contexte, enTexte, log };
+
+module.exports = {
+  runSend,
+  makeTransport,
+  normaliser,
+  contexte,
+  enTexte,
+  log
+};
