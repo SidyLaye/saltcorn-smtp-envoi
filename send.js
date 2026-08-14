@@ -53,10 +53,47 @@ const makeTransport = (cfg) => {
     host: cfg.host,
     port: cfg.port || 465,
     secure: cfg.tls !== false,
-    auth: { user: cfg.username, pass: cfg.password },
-    tls: cfg.allow_self_signed ? { rejectUnauthorized: false } : undefined,
-    // Sans ces délais, un serveur muet fait pendre la requête indéfiniment —
-    // exactement le symptôme rencontré sur « Send test email » avec Zimbra.
+  
+    auth: {
+      user: cfg.username,
+      pass: cfg.password
+    },
+  
+    tls: cfg.allow_self_signed
+      ? { rejectUnauthorized: false }
+      : undefined,
+  
+    /*
+     * POOL SMTP
+     *
+     * Une seule connexion SMTP est ouverte puis réutilisée
+     * pour les différents destinataires du lead.
+     *
+     * On ne change PAS la logique d'envoi :
+     * - toujours un mail par destinataire
+     * - toujours négociateur + secrétaire + custom
+     * - toujours la boucle séquentielle existante
+     * - aucun retry ajouté
+     */
+    pool: true,
+  
+    // Une seule connexion SMTP simultanée
+    maxConnections: 1,
+  
+    // Réutilisation de la même connexion
+    maxMessages: 100,
+  
+    /*
+     * Protection légère contre les rafales :
+     * maximum 1 message par seconde sur ce transport.
+     *
+     * Cela ne change pas la logique fonctionnelle,
+     * seulement la cadence SMTP.
+     */
+    rateDelta: 1000,
+    rateLimit: 1,
+  
+    // Timeouts existants conservés
     connectionTimeout: 15000,
     greetingTimeout: 15000,
     socketTimeout: 20000,
