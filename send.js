@@ -1,45 +1,50 @@
 /**
  * Envoi des messages et journalisation.
  *
- * Trois garanties, chacune couvrant une défaillance que les autres ne couvrent pas :
+ * NOUVEAU FONCTIONNEMENT :
  *
- *   1. Un envoi par destinataire — et non un envoi groupé. Un échec sur une
- *                                  adresse n'emporte pas les autres, et deux
- *                                  agences ne découvrent pas mutuellement
- *                                  leurs adresses.
- *   2. Aucune exception propagée  — un échec rend `erreur_envoi` et laisse le
- *                                  workflow poursuivre. Le run 516 s'est arrêté
- *                                  sur une erreur d'e-mail : `maj_lead` n'a
- *                                  jamais tourné et le lead est resté incomplet.
- *                                  C'est le défaut que ce module corrige.
- *   3. Journal systématique       — une ligne dans `notification` pour CHAQUE
- *                                  destinataire, y compris en mode test et y
- *                                  compris en échec. Sans quoi le tableau de
- *                                  bord ne peut pas répondre à « ce négociateur
- *                                  a-t-il été prévenu, et quand ».
+ * - Tous les destinataires d'un lead sont envoyés dans UN SEUL message SMTP.
+ * - Les destinataires sont placés en BCC.
+ * - Négociateur + secrétaire + custom reçoivent donc le message en même temps.
+ * - Les adresses restent invisibles entre elles.
+ * - Une ligne de journal est toujours écrite pour CHAQUE destinataire.
+ * - Un seul sendMail() est effectué par lead, ce qui évite les délais
+ *   successifs et les timeouts du workflow.
  */
 
 const Table = require("@saltcorn/data/models/table");
 const { getState } = require("@saltcorn/data/db/state");
 
+
 const log = (level, msg) => {
   try {
-    getState().log(level, `[smtp-envoi] ${msg}`);
+    getState().log(
+      level,
+      `[smtp-envoi] ${msg}`
+    );
   } catch (e) {
-    console.log(`[smtp-envoi] ${msg}`);
+    console.log(
+      `[smtp-envoi] ${msg}`
+    );
   }
 };
 
 
 /**
- * Construit un transport nodemailer depuis la configuration du plugin.
+ * Transport SMTP.
+ *
+ * Pool conservé, mais il n'y a désormais qu'un sendMail()
+ * pour tous les destinataires d'un lead.
  */
 const makeTransport = (cfg) => {
 
   let nodemailer;
 
   try {
-    nodemailer = require("nodemailer");
+
+    nodemailer =
+      require("nodemailer");
+
   } catch (e) {
 
     throw new Error(
@@ -51,7 +56,8 @@ const makeTransport = (cfg) => {
 
   return nodemailer.createTransport({
 
-    host: cfg.host,
+    host:
+      cfg.host,
 
     port:
       cfg.port || 465,
@@ -73,40 +79,39 @@ const makeTransport = (cfg) => {
 
 
     /*
-     * POOL SMTP
+     * Pool SMTP.
      *
-     * Une seule connexion SMTP est utilisée.
+     * Une seule connexion simultanée.
      *
-     * Maximum :
-     * 1 message toutes les 10 secondes.
+     * PLUS DE rateDelta / rateLimit :
+     * on n'envoie plus 3 messages successifs.
      *
-     * La logique métier ne change pas.
+     * Le lead entier = 1 message SMTP.
      */
-    pool: true,
+    pool:
+      true,
 
-    maxConnections: 1,
+    maxConnections:
+      1,
 
-    maxMessages: 100,
-
-    rateDelta: 10000,
-
-    rateLimit: 1,
+    maxMessages:
+      100,
 
 
-    /*
-     * Timeouts
-     */
-    connectionTimeout: 15000,
+    connectionTimeout:
+      15000,
 
-    greetingTimeout: 15000,
+    greetingTimeout:
+      15000,
 
-    socketTimeout: 20000
+    socketTimeout:
+      20000
   });
 };
 
 
 /**
- * Le contexte d'une étape de workflow peut arriver à plat ou sous `row`.
+ * Le contexte Saltcorn peut arriver à plat ou sous row.
  */
 const contexte = (args) => ({
   ...(args && args.row ? args.row : {}),
@@ -117,7 +122,7 @@ const contexte = (args) => ({
 /**
  * Normalise les destinataires.
  *
- * Formes acceptées :
+ * Accepte :
  *
  * "a@x.fr,b@y.fr"
  *
@@ -130,19 +135,26 @@ const contexte = (args) => ({
  *     user_id
  *   }
  * ]
+ *
+ * Une même adresse n'est conservée qu'une fois.
  */
 const normaliser = (brut, roleDefaut) => {
 
-  let liste = brut;
+  let liste =
+    brut;
 
 
-  if (typeof liste === "string") {
+  if (
+    typeof liste === "string"
+  ) {
 
     const t =
       liste.trim();
 
 
-    if (t.startsWith("[")) {
+    if (
+      t.startsWith("[")
+    ) {
 
       try {
 
@@ -163,7 +175,10 @@ const normaliser = (brut, roleDefaut) => {
   }
 
 
-  if (!Array.isArray(liste)) {
+  if (
+    !Array.isArray(liste)
+  ) {
+
     return [];
   }
 
@@ -176,19 +191,29 @@ const normaliser = (brut, roleDefaut) => {
     [];
 
 
-  for (const d of liste) {
+  for (
+    const d of liste
+  ) {
 
     const o =
+
       typeof d === "string"
+
         ? {
             email: d
           }
+
         : d || {};
 
 
     const email =
-      String(o.email || "")
+
+      String(
+        o.email || ""
+      )
+
         .trim()
+
         .toLowerCase();
 
 
@@ -197,6 +222,7 @@ const normaliser = (brut, roleDefaut) => {
       !email.includes("@") ||
       vus.has(email)
     ) {
+
       continue;
     }
 
@@ -226,7 +252,7 @@ const normaliser = (brut, roleDefaut) => {
 
 
 /**
- * Version texte d'un corps HTML.
+ * Version texte du HTML.
  */
 const enTexte = (html) =>
 
@@ -286,10 +312,15 @@ const enTexte = (html) =>
 
 
 /**
- * Écrit une ligne dans `notification`.
- * N'échoue jamais bruyamment.
+ * Journalisation.
+ *
+ * Une erreur de journal ne doit jamais
+ * transformer un envoi réussi en échec.
  */
-const journaliser = async (cfg, ligne) => {
+const journaliser = async (
+  cfg,
+  ligne
+) => {
 
   try {
 
@@ -302,7 +333,10 @@ const journaliser = async (cfg, ligne) => {
 
 
     if (t) {
-      await t.insertRow(ligne);
+
+      await t.insertRow(
+        ligne
+      );
     }
 
   } catch (e) {
@@ -316,9 +350,9 @@ const journaliser = async (cfg, ligne) => {
 
 
 /**
- * Une passe d'envoi.
+ * ENVOI
  *
- * Ne lève jamais.
+ * Un seul sendMail() pour tous les destinataires.
  */
 const runSend = async ({
   cfg,
@@ -335,11 +369,18 @@ const runSend = async ({
 
 
   const modeTest =
+
     cfg.mode_test === true ||
+
     modeTestLocal === true;
 
 
-  if (!cibles.length) {
+  /*
+   * Aucun destinataire.
+   */
+  if (
+    !cibles.length
+  ) {
 
     log(
       3,
@@ -348,15 +389,21 @@ const runSend = async ({
 
 
     return {
-      nb_envoyes: 0,
-      nb_echecs: 0,
-      erreur_envoi: "aucun destinataire"
+
+      nb_envoyes:
+        0,
+
+      nb_echecs:
+        0,
+
+      erreur_envoi:
+        "aucun destinataire"
     };
   }
 
 
   /*
-   * Adresses de redirection test.
+   * Redirections de test.
    */
   const redirection =
 
@@ -368,7 +415,9 @@ const runSend = async ({
 
       .map(
         (e) =>
-          e.trim().toLowerCase()
+          e
+            .trim()
+            .toLowerCase()
       )
 
       .filter(
@@ -378,17 +427,30 @@ const runSend = async ({
 
 
   /*
+   * Déduplication des adresses de test.
+   */
+  const redirectionUnique =
+    [
+      ...new Set(
+        redirection
+      )
+    ];
+
+
+  /*
    * MODE TEST SANS REDIRECTION
    *
-   * Rien ne part.
+   * Aucun SMTP.
    */
   if (
     modeTest &&
-    !redirection.length
+    !redirectionUnique.length
   ) {
 
 
-    for (const d of cibles) {
+    for (
+      const d of cibles
+    ) {
 
       await journaliser(
         cfg,
@@ -430,7 +492,8 @@ const runSend = async ({
 
     return {
 
-      nb_envoyes: 0,
+      nb_envoyes:
+        0,
 
       nb_simules:
         cibles.length,
@@ -439,6 +502,7 @@ const runSend = async ({
         "",
 
       apercu_destinataires:
+
         cibles
           .map(
             (d) => d.email
@@ -449,7 +513,7 @@ const runSend = async ({
 
 
   /*
-   * TRANSPORT SMTP
+   * Transport.
    */
   let tr;
 
@@ -468,10 +532,53 @@ const runSend = async ({
     );
 
 
+    /*
+     * On journalise également l'échec
+     * pour chaque destinataire.
+     */
+    for (
+      const d of cibles
+    ) {
+
+      await journaliser(
+        cfg,
+        {
+
+          lead:
+            leadId || null,
+
+          destinataire:
+            d.email,
+
+          role:
+            d.role,
+
+          user_id:
+            d.user_id,
+
+          objet:
+            sujet,
+
+          statut:
+            "echec",
+
+          erreur:
+            `transport SMTP : ${e.message}`,
+
+          envoye_le:
+            maintenant
+        }
+      );
+    }
+
+
     return {
 
       nb_envoyes:
         0,
+
+      nb_echecs:
+        cibles.length,
 
       erreur_envoi:
         `transport SMTP : ${e.message}`
@@ -479,103 +586,92 @@ const runSend = async ({
   }
 
 
-  let envoyes =
-    0;
+  /*
+   * Nom d'expéditeur facultatif.
+   */
+  const expediteur =
 
+    cfg.from_nom &&
+    String(
+      cfg.from_nom
+    ).trim()
 
-  const echecs =
-    [];
+      ? {
 
+          name:
+            String(
+              cfg.from_nom
+            ).trim(),
 
-  cibles.forEach(
-    (d, i) => {
-      d._rang = i;
-    }
-  );
+          address:
+            cfg.from_email
+
+        }
+
+      : cfg.from_email;
 
 
   /*
-   * UN ENVOI PAR DESTINATAIRE
+   * Destination réelle du message SMTP.
    *
-   * Cette logique reste inchangée.
+   * PRODUCTION :
+   * négociateur + secrétaire + custom
+   *
+   * MODE TEST :
+   * uniquement les adresses de redirection.
    */
-  for (const d of cibles) {
+  const destinatairesSmtp =
+
+    modeTest &&
+    redirectionUnique.length
+
+      ? redirectionUnique
+
+      : cibles.map(
+          (d) => d.email
+        );
 
 
-    const redirige =
-      modeTest &&
-      redirection.length > 0;
+  /*
+   * Un seul appel SMTP.
+   */
+  let info =
+    null;
 
 
-    const destination =
-
-      redirige
-
-        ? redirection[
-            d._rang %
-            redirection.length
-          ]
-
-        : d.email;
+  let erreurGlobale =
+    "";
 
 
-    let statut =
-      "echec";
+  try {
 
 
-    let erreur =
-      "";
-
-
-    try {
-
-
-      /*
-       * NOM D'EXPÉDITEUR FACULTATIF
-       *
-       * Si cfg.from_nom est vide :
-       *
-       * From: adresse@email.fr
-       *
-       * Si un nom existe :
-       *
-       * From: Nom <adresse@email.fr>
-       */
-      const expediteur =
-
-        cfg.from_nom &&
-        String(cfg.from_nom).trim()
-
-          ? {
-
-              name:
-                String(
-                  cfg.from_nom
-                ).trim(),
-
-              address:
-                cfg.from_email
-
-            }
-
-          : cfg.from_email;
-
-
+    info =
       await tr.sendMail({
 
         from:
           expediteur,
 
-        to:
-          destination,
+
+        /*
+         * Tous les destinataires sont en BCC.
+         *
+         * Ils reçoivent le mail simultanément
+         * sans voir les autres adresses.
+         */
+        bcc:
+          destinatairesSmtp,
+
 
         subject:
           sujet ||
           "(sans objet)",
 
+
         html:
           corps ||
           "<p>(corps vide)</p>",
+
 
         text:
           enTexte(corps) ||
@@ -583,19 +679,23 @@ const runSend = async ({
 
 
         /*
-         * Seulement en redirection de test.
+         * En mode test seulement.
          */
-        ...(redirige
+        ...(modeTest &&
+        redirectionUnique.length
 
           ? {
 
               headers: {
 
-                "X-Destinataire-Reel":
-                  d.email,
+                "X-Destinataires-Reels":
 
-                "X-Role-Destinataire":
-                  d.role || ""
+                  cibles
+                    .map(
+                      (d) => d.email
+                    )
+                    .join(",")
+
               }
 
             }
@@ -604,38 +704,299 @@ const runSend = async ({
       });
 
 
-      statut =
-        redirige
-          ? "redirige"
-          : "envoye";
+  } catch (e) {
 
 
-      envoyes++;
+    erreurGlobale =
+
+      String(
+        e && e.message
+          ? e.message
+          : e
+      )
+
+        .slice(
+          0,
+          400
+        );
 
 
-    } catch (e) {
+    log(
+      2,
+      `échec SMTP groupé : ${erreurGlobale}`
+    );
+  }
 
 
-      erreur =
-        String(
-          e && e.message
-            ? e.message
-            : e
+  /*
+   * Le transport peut maintenant être fermé :
+   * il n'y a qu'un seul message à envoyer.
+   */
+  try {
+
+    tr.close();
+
+  } catch (e) {
+
+    /* déjà fermé */
+
+  }
+
+
+  /*
+   * Si sendMail a complètement échoué,
+   * chaque destinataire réel est journalisé en échec.
+   */
+  if (
+    !info
+  ) {
+
+
+    for (
+      const d of cibles
+    ) {
+
+      await journaliser(
+        cfg,
+        {
+
+          lead:
+            leadId || null,
+
+          destinataire:
+            d.email,
+
+          role:
+            d.role,
+
+          user_id:
+            d.user_id,
+
+          objet:
+            sujet,
+
+          statut:
+            "echec",
+
+          erreur:
+            erreurGlobale,
+
+          envoye_le:
+            maintenant
+        }
+      );
+    }
+
+
+    log(
+      2,
+      `envoi terminé : 0 envoyé(s), ${cibles.length} échec(s)`
+    );
+
+
+    return {
+
+      nb_envoyes:
+        0,
+
+      nb_echecs:
+        cibles.length,
+
+      erreur_envoi:
+        erreurGlobale
+    };
+  }
+
+
+  /*
+   * MODE TEST AVEC REDIRECTION
+   *
+   * Le message a été accepté par le SMTP
+   * vers les adresses de test.
+   *
+   * On conserve néanmoins le vrai destinataire
+   * dans le journal.
+   */
+  if (
+    modeTest &&
+    redirectionUnique.length
+  ) {
+
+
+    const destinationTest =
+      redirectionUnique.join(", ");
+
+
+    for (
+      const d of cibles
+    ) {
+
+      await journaliser(
+        cfg,
+        {
+
+          lead:
+            leadId || null,
+
+          destinataire:
+            d.email,
+
+          role:
+            d.role,
+
+          user_id:
+            d.user_id,
+
+          objet:
+            sujet,
+
+          statut:
+            "redirige",
+
+          erreur:
+            `redirigé vers ${destinationTest}`,
+
+          envoye_le:
+            maintenant
+        }
+      );
+    }
+
+
+    log(
+      5,
+      `envoi test terminé : ${cibles.length} destinataire(s) représenté(s)`
+    );
+
+
+    return {
+
+      nb_envoyes:
+        cibles.length,
+
+      nb_echecs:
+        0,
+
+      erreur_envoi:
+        ""
+    };
+  }
+
+
+  /*
+   * PRODUCTION
+   *
+   * Nodemailer peut retourner les adresses
+   * acceptées et rejetées par le serveur SMTP.
+   */
+  const acceptes =
+
+    new Set(
+
+      (info.accepted || [])
+
+        .map(
+          (e) =>
+            String(e)
+              .trim()
+              .toLowerCase()
         )
-          .slice(
-            0,
-            400
-          );
+    );
 
 
-      echecs.push(
-        `${destination} → ${erreur}`
+  const rejetes =
+
+    new Set(
+
+      (info.rejected || [])
+
+        .map(
+          (e) =>
+            String(e)
+              .trim()
+              .toLowerCase()
+        )
+    );
+
+
+  let envoyes =
+    0;
+
+
+  let echecs =
+    0;
+
+
+  const erreurs =
+    [];
+
+
+  /*
+   * Une ligne de journal par destinataire,
+   * même si l'envoi SMTP était groupé.
+   */
+  for (
+    const d of cibles
+  ) {
+
+
+    const email =
+      String(
+        d.email
+      )
+        .trim()
+        .toLowerCase();
+
+
+    /*
+     * Rejet SMTP explicite.
+     */
+    const estRejete =
+      rejetes.has(email);
+
+
+    /*
+     * Si Nodemailer ne remonte pas de liste rejected,
+     * un sendMail() réussi est considéré comme envoyé.
+     */
+    const estAccepte =
+
+      acceptes.has(email) ||
+
+      (
+        !rejetes.size &&
+        !acceptes.size
       );
 
 
-      log(
-        2,
-        `échec vers ${destination} : ${erreur}`
+    const statut =
+
+      estRejete
+        ? "echec"
+        : "envoye";
+
+
+    const erreur =
+
+      estRejete
+
+        ? "adresse rejetée par le serveur SMTP"
+
+        : "";
+
+
+    if (
+      statut === "envoye"
+    ) {
+
+      envoyes++;
+
+    } else {
+
+      echecs++;
+
+      erreurs.push(
+        `${d.email} → ${erreur}`
       );
     }
 
@@ -661,17 +1022,7 @@ const runSend = async ({
 
         statut,
 
-        erreur:
-
-          erreur ||
-
-          (
-            redirige
-
-              ? `redirigé vers ${destination}`
-
-              : ""
-          ),
+        erreur,
 
         envoye_le:
           maintenant
@@ -680,20 +1031,9 @@ const runSend = async ({
   }
 
 
-  try {
-
-    tr.close();
-
-  } catch (e) {
-
-    /* transport déjà fermé */
-
-  }
-
-
   log(
     5,
-    `envoi terminé : ${envoyes} envoyé(s), ${echecs.length} échec(s)`
+    `envoi groupé terminé : ${envoyes} envoyé(s), ${echecs} échec(s)`
   );
 
 
@@ -703,10 +1043,10 @@ const runSend = async ({
       envoyes,
 
     nb_echecs:
-      echecs.length,
+      echecs,
 
     erreur_envoi:
-      echecs.join(" | ")
+      erreurs.join(" | ")
   };
 };
 
