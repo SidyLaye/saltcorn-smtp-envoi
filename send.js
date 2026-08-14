@@ -90,7 +90,7 @@ const makeTransport = (cfg) => {
      * Cela ne change pas la logique fonctionnelle,
      * seulement la cadence SMTP.
      */
-    rateDelta: 1000,
+    rateDelta: 10000,
     rateLimit: 1,
   
     // Timeouts existants conservés
